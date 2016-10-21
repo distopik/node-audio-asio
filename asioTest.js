@@ -2,16 +2,17 @@ const nodeAsio= require('./build/Release/nodeAudioAsio'),
       fs      = require('fs')
 
 const samplesPerBlock  = 256,
-      bitsPerSample    = 24,
+      bitsPerSample    = 32,
       channelBufferLen = samplesPerBlock * bitsPerSample / 8,
       buf              = new Buffer(1024)
 
 var out = 0
 
+
 fs.open('output.raw', 'w', (err, fd) => {
   out = fd
 
-  const asioErr = nodeAsio.initAsio({
+  const asioErr = nodeAsio.init({
   	driver: 'ASIO4ALL v2',
   	sampleRate: 44100,
   	bitsPerSample: bitsPerSample,

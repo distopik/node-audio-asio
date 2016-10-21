@@ -77,11 +77,11 @@ typedef struct DriverInfo{
 }DriverInfo;
 typedef struct Work{
 	uv_work_t request;
-	int index;
+	int index; // index for double asio buffers
 }Work;
 
 DriverInfo asioDriverInfo = { 0 };
-//struct hold all the asioCallbacks function addresses ?
+//struct hold all the asioCallbacks function addresses 
 ASIOCallbacks asioCallbacks;
 // some external references
 extern AsioDrivers* asioDrivers;
@@ -89,8 +89,8 @@ bool loadAsioDriver(char *name);
 
 // internal prototypes (required for the Metrowerks CodeWarrior compiler)
 int main(int argc, char* argv[]);
-long initAsioDriverInfo(DriverInfo *asioDriverInfo);
-ASIOError createAsioBuffers(DriverInfo *asioDriverInfo, std::string end, std::vector<int> iC, std::vector<int> oC);
+long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int spb, std::vector<int> iC, std::vector<int> oC);
+ASIOError createAsioBuffers(DriverInfo *asioDriverInfo, int bps, std::string end, std::vector<int> iC, std::vector<int> oC);
 unsigned long getSysReferenceTime();
 static void WorkAsync(uv_work_t *req);
 static void WorkAsyncComplete(uv_work_t *req,int status);
@@ -101,7 +101,7 @@ ASIOTime *bufferSwitchTimeInfo(ASIOTime *timeInfo, long index, ASIOBool processN
 void sampleRateChanged(ASIOSampleRate sRate);
 long asioMessages(long selector, long value, void* message, double* opt);
 
-long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int bps, int spb, std::string end, std::vector<int> iC, std::vector<int> oC){	
+long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int spb, std::vector<int> iC, std::vector<int> oC){	
 	// collect the informational data of the driver
 	// get the number of available channels
 	
@@ -115,12 +115,11 @@ long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int bps, int spb, st
 		if (ASIOGetBufferSize(&asioDriverInfo->minSize, &asioDriverInfo->maxSize, &asioDriverInfo->preferredSize, &asioDriverInfo->granularity) == ASE_OK)
 		{
 			printf("ASIOGetBufferSize (min: %d, max: %d, preferred: %d, granularity: %d);\n",
-				asioDriverInfo->minSize, asioDriverInfo->maxSize,
-				asioDriverInfo->preferredSize, asioDriverInfo->granularity);
-			printf("we are going to use preferred size: %d and granularity: %d\n", spb, bps);
+			asioDriverInfo->minSize, asioDriverInfo->maxSize,
+			asioDriverInfo->preferredSize, asioDriverInfo->granularity);
+			printf("we are going to use preferred size: %d\n", spb);
 			asioDriverInfo->preferredSize = spb;
 			
-
 			// get the currently selected sample rate
 			if (ASIOGetSampleRate(&asioDriverInfo->sampleRate) == ASE_OK)
 			{
@@ -159,7 +158,7 @@ long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int bps, int spb, st
 	}
 	return -1;
 }
-ASIOError createAsioBuffers(DriverInfo *asioDriverInfo, std::vector<int> iC, std::vector<int> oC)
+ASIOError createAsioBuffers(DriverInfo *asioDriverInfo, int bps, std::string end, std::vector<int> iC, std::vector<int> oC)
 {	// create buffers for all inputs and outputs of the card with the 
 	// preferredSize from ASIOGetBufferSize() as buffer size
 	long i;
@@ -209,7 +208,24 @@ ASIOError createAsioBuffers(DriverInfo *asioDriverInfo, std::vector<int> iC, std
 			if (result != ASE_OK)
 				break;
 		}
+		//check if supported endianess and bitsPerSample
+		
+		switch(asioDriverInfo->channelInfos[0].type){
+			case 16:
+				printf("Supported type is 16 bits per sample, little endianess\n");
+				printf("Requested type is %d bits per sample, %s endianess\n", bps, end);
+			break;
+			
+			case 17:
+				printf("Supported type is 24 bits per sample, little endianess\n");
+				printf("Requested type is %d bits per sample, %s endianess\n", bps, end);
+			break;
 
+			case 18:
+				printf("Supported type is 32 bits per sample, little endianess\n");
+				printf("Requested type is %d bits per sample, %s endianess\n", bps, end);
+			break;					
+		}
 		if (result == ASE_OK)
 		{
 			// get the input and output latencies
@@ -245,9 +261,8 @@ void sampleRateChanged(ASIOSampleRate sRate){
 void buffer_delete_callback(char* data, void* hint) {  }
 
 static void WorkAsync(uv_work_t *req) { 
-// this is the worker thread, lets build up the results 
-// allocated results from the heap because we'll need 
-// to access in the event loop later to send back 
+//worker thread
+//we don't do anythign here because this thread dosent have access to v8
 }
 static void WorkAsyncComplete(uv_work_t *req, int status){
 	Isolate * isolate = Isolate::GetCurrent(); 
@@ -268,7 +283,6 @@ static void WorkAsyncComplete(uv_work_t *req, int status){
 					inputArr->Set(i, Nan::NewBuffer((char *)asioDriverInfo.bufferInfos[i].buffers[index], buffSize * 3, buffer_delete_callback, 0).ToLocalChecked());
 					break;
 				case ASIOSTInt32LSB:
-					//printf("%d", asioDriverInfo.channelInfos[fourthOutputStream].type);
 					inputArr->Set(i, Nan::NewBuffer((char *)asioDriverInfo.bufferInfos[i].buffers[index], buffSize * 4, buffer_delete_callback, 0).ToLocalChecked());
 					break;
 			}				
@@ -291,7 +305,6 @@ static void WorkAsyncComplete(uv_work_t *req, int status){
 					memcpy(asioDriverInfo.bufferInfos[i].buffers[index], (char*) node::Buffer::Data(outputArr->Get(0)), buffSize * 3);
 					break;
 				case ASIOSTInt32LSB:
-					//printf("%d", asioDriverInfo.channelInfos[fourthOutputStream].type);
 					memcpy(asioDriverInfo.bufferInfos[i].buffers[index], (char*) node::Buffer::Data(outputArr->Get(0)), buffSize * 4);
 					break;
 			}				
@@ -328,17 +341,6 @@ ASIOTime *bufferSwitchTimeInfo(ASIOTime *timeInfo, long index, ASIOBool processN
 
 	// get the system reference time
 	asioDriverInfo.sysRefTime = getSysReferenceTime();
-
-#if WINDOWS && _DEBUG
-	// a few debug messages for the Windows device driver developer
-	// tells you the time when driver got its interrupt and the delay until the app receives
-	// the event notification.
-	static double last_samples = 0;
-	char tmp[128];
-	sprintf(tmp, "diff: %d / %d ms / %d ms / %d samples                 \n", asioDriverInfo.sysRefTime - (long)(asioDriverInfo.nanoSeconds / 1000000.0), asioDriverInfo.sysRefTime, (long)(asioDriverInfo.nanoSeconds / 1000000.0), (long)(asioDriverInfo.samples - last_samples));
-	OutputDebugString(tmp);
-	last_samples = asioDriverInfo.samples;
-#endif
 	
 	// buffer size in samples
 	long buffSize = asioDriverInfo.preferredSize;
@@ -349,73 +351,7 @@ ASIOTime *bufferSwitchTimeInfo(ASIOTime *timeInfo, long index, ASIOBool processN
 	work->index = index;
 	//kicking of the worker thread
 	uv_queue_work(uv_default_loop(), &work->request, WorkAsync, WorkAsyncComplete);
-	//puts("assas");
-	//get isolate 
-	//printf("%d \n", GetCurrentThreadId());
-/*
-	//printf("pls work: %d\n", v8::Locker::IsActive());
-	Local<Array> inputArr = Array::New(asioDriverInfo.isolate, buffSize*4);
-	
-	for (int i = 0; i < asioDriverInfo.inputBuffers + asioDriverInfo.outputBuffers; i++){
-		if(asioDriverInfo.bufferInfos[i].isInput == true){
-			switch (asioDriverInfo.channelInfos[i].type){
-				case ASIOSTInt16LSB:
-					inputArr->Set(i, Nan::NewBuffer((char *)asioDriverInfo.bufferInfos[i].buffers[index], buffSize * 2, buffer_delete_callback, 0).ToLocalChecked());
-					break;
-				case ASIOSTInt24LSB:		// used for 20 bits as well
-					inputArr->Set(i, Nan::NewBuffer((char *)asioDriverInfo.bufferInfos[i].buffers[index], buffSize * 3, buffer_delete_callback, 0).ToLocalChecked());
-					break;
-				case ASIOSTInt32LSB:
-					//printf("%d", asioDriverInfo.channelInfos[fourthOutputStream].type);
-					inputArr->Set(i, Nan::NewBuffer((char *)asioDriverInfo.bufferInfos[i].buffers[index], buffSize * 4, buffer_delete_callback, 0).ToLocalChecked());
-					break;
-			}				
-		}
-	
-	}
-	
-	
-	//pack argv
-	Local<Value> argv[] = {inputArr};
-	Local<Array> outputArr = Local<Array>::Cast(Local<Function>::New(asioDriverInfo.isolate, asioDriverInfo.callback)->Call(asioDriverInfo.isolate->GetCurrentContext()->Global(), 1, argv));
-	// OK do processing for the outputs only
-	
-	for (int i = 0; i < asioDriverInfo.inputBuffers + asioDriverInfo.outputBuffers; i++){
-		if(asioDriverInfo.bufferInfos[i].isInput == false){
-			switch (asioDriverInfo.channelInfos[i].type){
-				case ASIOSTInt16LSB:
-					memcpy(asioDriverInfo.bufferInfos[i].buffers[index], (char*) node::Buffer::Data(outputArr->Get(0)), buffSize * 2);
-					break;
-				case ASIOSTInt24LSB:		// used for 20 bits as well
-					memcpy(asioDriverInfo.bufferInfos[i].buffers[index], (char*) node::Buffer::Data(outputArr->Get(0)), buffSize * 3);
-					break;
-				case ASIOSTInt32LSB:
-					//printf("%d", asioDriverInfo.channelInfos[fourthOutputStream].type);
-					memcpy(asioDriverInfo.bufferInfos[i].buffers[index], (char*) node::Buffer::Data(outputArr->Get(0)), buffSize * 4);
-					break;
-			}				
-		}
-	
-	}
-	*/
-	/*
-	switch (asioDriverInfo.channelInfos[firstOutputStream].type)
-	{
-	case ASIOSTInt16LSB:
-		memcpy(asioDriverInfo.bufferInfos[firstOutputStream].buffers[index], asioDriverInfo.bufferInfos[firstInputStream].buffers[index], buffSize * 2);
 
-		break;
-	case ASIOSTInt24LSB:		// used for 20 bits as well
-		memcpy(asioDriverInfo.bufferInfos[firstOutputStream].buffers[index], asioDriverInfo.bufferInfos[firstInputStream].buffers[index], buffSize * 3);
-
-		break;
-	case ASIOSTInt32LSB:
-		//printf("%d", asioDriverInfo.channelInfos[fourthOutputStream].type);
-		//memcpy(asioDriverInfo.bufferInfos[firstOutputStream].buffers[index], asioDriverInfo.bufferInfos[firstInputStream].buffers[index], buffSize * 4);
-		//memcpy(asioDriverInfo.bufferInfos[secondOutputStream].buffers[index], asioDriverInfo.bufferInfos[secondInputStream].buffers[index], buffSize * 4);
-
-		break;
-	}*/
 	// finally if the driver supports the ASIOOutputReady() optimization, do it here, all data are in place
 	if (asioDriverInfo.postOutput)
 		ASIOOutputReady();
@@ -445,15 +381,7 @@ void bufferSwitch(long index, ASIOBool processNow)
 }
 unsigned long getSysReferenceTime()
 {	// get the system reference time
-#if WINDOWS
 	return 0;
-#elif MAC
-	static const double twoRaisedTo32 = 4294967296.;
-	UnsignedWide ys;
-	Microseconds(&ys);
-	double r = ((double)ys.hi * twoRaisedTo32 + (double)ys.lo);
-	return (unsigned long)(r / 1000.);
-#endif
 }
 void AsioInit(const FunctionCallbackInfo<Value>& args){
 	Isolate * isolate = args.GetIsolate(); 
@@ -506,14 +434,14 @@ void AsioInit(const FunctionCallbackInfo<Value>& args){
 				asioDriverInfo.driverInfo.asioVersion, asioDriverInfo.driverInfo.driverVersion,
 				asioDriverInfo.driverInfo.name, asioDriverInfo.driverInfo.errorMessage);
 				
-			if (initAsioDriverInfo(&asioDriverInfo,sampleRate, bitsPerSample, samplesPerBlock, endianess, inputChannels, outputChannels) == 0){
+			if (initAsioDriverInfo(&asioDriverInfo,sampleRate, samplesPerBlock, inputChannels, outputChannels) == 0){
 				
 				asioCallbacks.bufferSwitch = &bufferSwitch;
 				asioCallbacks.sampleRateDidChange = &sampleRateChanged;
 				asioCallbacks.asioMessage = &asioMessages;
 				asioCallbacks.bufferSwitchTimeInfo = &bufferSwitchTimeInfo;
 				
-				if(createAsioBuffers(&asioDriverInfo, inputChannels, outputChannels) == ASE_OK){
+				if(createAsioBuffers(&asioDriverInfo, bitsPerSample, endianess, inputChannels, outputChannels) == ASE_OK){
 
 					Local<Number> retval = Int32::New(isolate, -1);
 					args.GetReturnValue().Set(retval);
@@ -540,22 +468,14 @@ void AsioInit(const FunctionCallbackInfo<Value>& args){
 void AsioStart(const FunctionCallbackInfo<Value>& args){
 	Isolate* isolate = args.GetIsolate();
 	
-	// extract each location (its a list) and 
-	// store it in the work package 
-	// work (and thus, locations) is on the heap, 
-	// accessible in the libuv threads 
-
-	// store the callback from JS in the work 
-	// package so we can invoke it later 
 	Local<Function> callback = Local<Function>::Cast(args[1]); 
 	Local<Array> recordedBuffers = Local<Array>::Cast(args[0]);
+	
 	asioDriverInfo.callback.Reset(isolate, callback);
-	//asioDriverInfo.recordedBuffers.Reset(isolate, recordedBuffers);
 	asioDriverInfo.isolate = isolate;
-	printf("%d \n", GetCurrentThreadId());
+	
 	ASIOControlPanel();
 	ASIOStart();
-	printf("first\n");
 }
 
 void AsioStop(const FunctionCallbackInfo<Value>& args){
@@ -568,74 +488,9 @@ void AsioDeInit(const FunctionCallbackInfo<Value>& args){
 	asioDrivers->removeCurrentDriver();
 	return;
 }
-/*
-static int unused_main(int argc, char* argv[])
-{
-	// load the driver, this will setup all the necessary internal data structures
-	if (loadAsioDriver(ASIO_DRIVER_NAME))
-	{
-		// initialize the driver
-		if (ASIOInit(&asioDriverInfo.driverInfo) == ASE_OK)
-		{
-			printf("asioVersion:   %d\n"
-				"driverVersion: %d\n"
-				"Name:          %s\n"
-				"ErrorMessage:  %s\n",
-				asioDriverInfo.driverInfo.asioVersion, asioDriverInfo.driverInfo.driverVersion,
-				asioDriverInfo.driverInfo.name, asioDriverInfo.driverInfo.errorMessage);
-			if (initAsioDriverInfo(&asioDriverInfo) == 0)
-			{
-				// ASIOControlPanel(); you might want to check wether the ASIOControlPanel() can open
-				ASIOControlPanel();
-				// set up the asioCallback structure and create the ASIO data buffer
-				asioCallbacks.bufferSwitch = &bufferSwitch;
-				asioCallbacks.sampleRateDidChange = &sampleRateChanged;
-				asioCallbacks.asioMessage = &asioMessages;
-				asioCallbacks.bufferSwitchTimeInfo = &bufferSwitchTimeInfo;
-				if (createAsioBuffers(&asioDriverInfo) == ASE_OK)
-				{
-					if (ASIOStart() == ASE_OK)
-					{
-						// Now all is up and running
-						fprintf(stdout, "\nASIO Driver started succefully.\n\n");
-						while (!(GetAsyncKeyState('0') & 0x8000))
-						{
-#if WINDOWS
-							Sleep(100);	// goto sleep for 100 milliseconds
-#elif MAC
-							unsigned long dummy;
-							Delay(6, &dummy);
-#endif
-							//fprintf(stdout, "%d ms / %d ms / %d samples", asioDriverInfo.sysRefTime, (long)(asioDriverInfo.nanoSeconds / 1000000.0), (long)asioDriverInfo.samples);
-							/*
-							// create a more readable time code format (the quick and dirty way)
-							double remainder = asioDriverInfo.tcSamples;
-							long hours = (long)(remainder / (asioDriverInfo.sampleRate * 3600));
-							remainder -= hours * asioDriverInfo.sampleRate * 3600;
-							long minutes = (long)(remainder / (asioDriverInfo.sampleRate * 60));
-							remainder -= minutes * asioDriverInfo.sampleRate * 60;
-							long seconds = (long)(remainder / asioDriverInfo.sampleRate);
-							remainder -= seconds * asioDriverInfo.sampleRate;
-							fprintf(stdout, " / TC: %2.2d:%2.2d:%2.2d:%5.5d", (long)hours, (long)minutes, (long)seconds, (long)remainder);
 
-							fprintf(stdout, "     \r");
-#if !MAC
-							fflush(stdout);
-#endif
-						}
-						ASIOStop();
-					}
-					ASIODisposeBuffers();
-				}
-			}
-			ASIOExit();
-		}
-		asioDrivers->removeCurrentDriver();
-	}
-	return 0;
-}*/
 void init(Local<Object> exports){
-	NODE_SET_METHOD(exports, "initAsio", AsioInit);
+	NODE_SET_METHOD(exports, "init", AsioInit);
 	NODE_SET_METHOD(exports, "stop", AsioStop);
 	NODE_SET_METHOD(exports, "deInit", AsioDeInit);
 	NODE_SET_METHOD(exports, "start", AsioStart);
