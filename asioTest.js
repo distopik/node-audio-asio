@@ -2,7 +2,7 @@ const nodeAsio= require('./build/Release/nodeAudioAsio'),
       fs      = require('fs')
 
 const samplesPerBlock  = 256,
-      bitsPerSample    = 32,
+      bitsPerSample    = 24,
       channelBufferLen = samplesPerBlock * bitsPerSample / 8,
       buf              = new Buffer(1024)
 
@@ -29,3 +29,4 @@ fs.open('output.raw', 'w', (err, fd) => {
 })
 
 setTimeout(E =>nodeAsio.stop(),10000 );
+setTimeout(E =>nodeAsio.deInit(),10000 );
