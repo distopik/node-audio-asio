@@ -87,6 +87,69 @@ ASIOCallbacks asioCallbacks;
 extern AsioDrivers* asioDrivers;
 bool loadAsioDriver(char *name);
 
+// making getDriverNames a bit more global like loadAsioDriver
+long getDriverNames(char **names, long maxDrivers, AsioDrivers* asiodrivers){
+	if(!asiodrivers){
+		asiodrivers = new AsioDrivers();
+	}
+	if(asiodrivers){
+		return asiodrivers->getDriverNames(names,maxDrivers);
+	}
+	return false;
+}
+// quick dirty function overload
+long getDriverNames(char **names, long maxDrivers){
+	return getDriverNames(names,maxDrivers,asioDrivers);
+}
+
+// unfortunately there was no nice function to get the number of devices
+// so I wrote this~, we're taking advantage of the preprocessor conditions
+// used in the SDK to switch the function we're returning here...
+long getNumOfAsioDevices(AsioDrivers* asiodrivers){
+	if(!asiodrivers){
+		asiodrivers = new AsioDrivers();
+	}
+	if(asiodrivers){
+		#if WINDOWS 
+		return asiodrivers->asioGetNumDev();
+		#elif MAC
+		return asiodrivers->getNumFragments();
+		#elif SGI || BEOS
+		return 0; /* not implemented by SDK :( */
+		#endif
+	}
+	return false;
+}
+// quick dirty function overload
+long getNumOfAsioDevices(){
+	return getNumOfAsioDevices(asioDrivers);
+}
+
+// returns to us an array of c strings with the device driver names in them...and plays it safe memory wise
+char ** getDeviceDrivers(AsioDrivers* asiodrivers, long maxDrivers = 256){
+	long numDevices = getNumOfAsioDevices(asiodrivers);
+	//fail fast, we don't have drivers, return null pointer
+	if( numDevices < 1 ){
+		return NULL;
+	}
+	//size our string array appropriately
+	maxDrivers = ( numDevices < maxDrivers ) ? ( numDevices ) : ( maxDrivers );
+	char **nameArray = new char*[maxDrivers];
+	for(long i = 0; i < maxDrivers; i++){
+		//looking through ASIO's SDK all references to device driver names are 32 characters including /0
+		nameArray[i] = new char[32];
+	}
+	//MAC implementation used unsafe strcpy as part of it's method...I assumed it was safe from the docs because of
+	//the references to 32 characters*, however MAC devices might have a higher upper limit to device names...I don't know
+	//TLDR; on a MAC it may be possible the device driver may be longer than 32 characters...then ?
+	getDriverNames(nameArray,numDevices);
+	return nameArray;
+}
+// yet another quick dirty function overload
+char ** getDeviceDrivers(long maxDrivers = 256){
+	return getDeviceDrivers(asioDrivers,maxDrivers); 
+}
+
 // internal prototypes (required for the Metrowerks CodeWarrior compiler)
 int main(int argc, char* argv[]);
 long initAsioDriverInfo(DriverInfo *asioDriverInfo, int sR, int spb, std::vector<int> iC, std::vector<int> oC);
@@ -287,7 +350,6 @@ static void WorkAsyncComplete(uv_work_t *req, int status){
 					break;
 			}				
 		}
-	
 	}
 	
 	//pack argv
@@ -309,7 +371,6 @@ static void WorkAsyncComplete(uv_work_t *req, int status){
 					break;
 			}				
 		}
-	
 	}
 	
 }
@@ -488,8 +549,35 @@ void AsioDeInit(const FunctionCallbackInfo<Value>& args){
 	asioDrivers->removeCurrentDriver();
 	return;
 }
+//Returns an array of strings for javascript of each driver name
+void AsioList(const FunctionCallbackInfo<Value>& args){
+	Isolate* isolate = args.GetIsolate();
+	/*programmed this synchronously...perhaps best not? idk..., don't care about parameters*/
+	//making the array
+	Local<Array> result_list = Array::New(isolate);
+	//getting the number of devices~
+	long numOfDevices = getNumOfAsioDevices(asioDrivers);
+	printf("ASIO Devices: %ld\n",numOfDevices);
+	//returning a c array of strings with a char **
+	char** names = getDeviceDrivers();
+	//make sure the thing's not empty
+	if(names == NULL){
+		//return null or empty array? let's go with empty array
+		args.GetReturnValue().Set(result_list);
+		return;
+	}
+	//set each index of the array by casting the char*'s with Nan::New<string>()
+	for(long i = 0; i < numOfDevices; i++){
+		printf("Driver[%ld]: %s\n",i,names[i]);
+		result_list->Set(i,Nan::New<String>(names[i]).ToLocalChecked());
+	}
+	//return the array
+	args.GetReturnValue().Set(result_list);
+}
 
 void init(Local<Object> exports){
+//we can limit access to list with the preprocessor directives*...may be good idea
+	NODE_SET_METHOD(exports, "list", AsioList);
 	NODE_SET_METHOD(exports, "init", AsioInit);
 	NODE_SET_METHOD(exports, "stop", AsioStop);
 	NODE_SET_METHOD(exports, "deInit", AsioDeInit);
